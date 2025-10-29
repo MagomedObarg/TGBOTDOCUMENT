@@ -1,0 +1,267 @@
+"""
+Обработчики для генерации документов.
+Использует FSM (Finite State Machine) для управления процессом создания документа.
+"""
+
+import logging
+from aiogram import Router, F
+from aiogram.filters import Command, StateFilter
+from aiogram.types import Message, CallbackQuery, FSInputFile
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+
+from telegram_doc_bot.services import GeminiService, DocumentService
+from telegram_doc_bot.utils.keyboards import (
+    get_main_keyboard,
+    get_template_keyboard,
+    get_document_type_keyboard,
+    get_cancel_keyboard
+)
+from telegram_doc_bot.config import Config
+
+logger = logging.getLogger(__name__)
+
+# Создание роутера для обработчиков документов
+router = Router()
+
+
+class DocumentGeneration(StatesGroup):
+    """Состояния для процесса генерации документа"""
+    choosing_template = State()  # Выбор шаблона
+    entering_request = State()   # Ввод описания документа
+    choosing_doc_type = State()  # Выбор типа файла (Word/PDF)
+
+
+@router.message(Command("generate"))
+@router.message(F.text == "📝 Создать документ")
+async def start_document_generation(message: Message, state: FSMContext):
+    """
+    Начало процесса создания документа
+    
+    Args:
+        message: Сообщение пользователя
+        state: Состояние FSM
+    """
+    await state.clear()
+    
+    await message.answer(
+        "📝 <b>Создание документа</b>\n\n"
+        "Выберите тип шаблона документа:",
+        parse_mode="HTML",
+        reply_markup=get_template_keyboard()
+    )
+    
+    await state.set_state(DocumentGeneration.choosing_template)
+    logger.info(f"Пользователь {message.from_user.id} начал создание документа")
+
+
+@router.callback_query(DocumentGeneration.choosing_template, F.data.startswith("template_"))
+async def template_chosen(callback: CallbackQuery, state: FSMContext):
+    """
+    Обработка выбора шаблона документа
+    
+    Args:
+        callback: Callback запрос
+        state: Состояние FSM
+    """
+    template_type = callback.data.split("_")[1]
+    template_name = Config.DOCUMENT_TEMPLATES.get(template_type, "Произвольный документ")
+    
+    # Сохранение выбранного шаблона в состояние
+    await state.update_data(template_type=template_type, template_name=template_name)
+    
+    await callback.message.edit_text(
+        f"✅ Выбран шаблон: <b>{template_name}</b>",
+        parse_mode="HTML"
+    )
+    
+    await callback.message.answer(
+        "📝 Теперь опишите, какой документ вам нужен.\n\n"
+        "Укажите все важные детали:\n"
+        "• Для договора: стороны, предмет, условия\n"
+        "• Для заявления: кому, от кого, суть просьбы\n"
+        "• Для резюме: ФИО, опыт, навыки, образование\n"
+        "• Для письма: адресат, тема, основное содержание\n\n"
+        f"Максимальная длина: {Config.MAX_REQUEST_LENGTH} символов",
+        reply_markup=get_cancel_keyboard()
+    )
+    
+    await state.set_state(DocumentGeneration.entering_request)
+    await callback.answer()
+    
+    logger.info(f"Пользователь {callback.from_user.id} выбрал шаблон: {template_name}")
+
+
+@router.message(DocumentGeneration.entering_request, F.text == "❌ Отмена")
+@router.message(Command("cancel"))
+async def cancel_generation(message: Message, state: FSMContext):
+    """
+    Отмена процесса генерации документа
+    
+    Args:
+        message: Сообщение пользователя
+        state: Состояние FSM
+    """
+    await state.clear()
+    
+    await message.answer(
+        "❌ Создание документа отменено.",
+        reply_markup=get_main_keyboard()
+    )
+    
+    logger.info(f"Пользователь {message.from_user.id} отменил создание документа")
+
+
+@router.message(DocumentGeneration.entering_request, F.text)
+async def request_entered(message: Message, state: FSMContext):
+    """
+    Обработка введённого описания документа
+    
+    Args:
+        message: Сообщение пользователя с описанием
+        state: Состояние FSM
+    """
+    user_request = message.text
+    
+    # Проверка длины запроса
+    if len(user_request) > Config.MAX_REQUEST_LENGTH:
+        await message.answer(
+            f"⚠️ Ваш запрос слишком длинный ({len(user_request)} символов).\n"
+            f"Максимальная длина: {Config.MAX_REQUEST_LENGTH} символов.\n\n"
+            "Пожалуйста, сократите описание и попробуйте снова."
+        )
+        return
+    
+    if len(user_request) < 10:
+        await message.answer(
+            "⚠️ Описание слишком короткое.\n"
+            "Пожалуйста, опишите подробнее, какой документ вам нужен."
+        )
+        return
+    
+    # Сохранение запроса в состояние
+    await state.update_data(user_request=user_request)
+    
+    await message.answer(
+        "✅ Описание принято!\n\n"
+        "Теперь выберите формат документа:",
+        reply_markup=get_document_type_keyboard()
+    )
+    
+    await state.set_state(DocumentGeneration.choosing_doc_type)
+    
+    logger.info(f"Пользователь {message.from_user.id} ввёл описание документа: {user_request[:50]}...")
+
+
+@router.callback_query(DocumentGeneration.choosing_doc_type, F.data.startswith("doctype_"))
+async def document_type_chosen(callback: CallbackQuery, state: FSMContext, 
+                               gemini_service: GeminiService, 
+                               document_service: DocumentService):
+    """
+    Обработка выбора типа документа и генерация
+    
+    Args:
+        callback: Callback запрос
+        state: Состояние FSM
+        gemini_service: Сервис Gemini API
+        document_service: Сервис генерации документов
+    """
+    doc_type = callback.data.split("_")[1]
+    
+    # Получение данных из состояния
+    data = await state.get_data()
+    template_type = data.get('template_type')
+    template_name = data.get('template_name')
+    user_request = data.get('user_request')
+    
+    await callback.message.edit_text(
+        f"✅ Формат: <b>{Config.DOCUMENT_TYPES[doc_type]}</b>",
+        parse_mode="HTML"
+    )
+    
+    # Отправка сообщения о начале генерации
+    status_message = await callback.message.answer(
+        "⏳ Генерирую документ...\n"
+        "Это может занять 10-30 секунд. Пожалуйста, подождите.",
+        reply_markup=get_main_keyboard()
+    )
+    
+    try:
+        # Генерация контента с помощью Gemini
+        logger.info(f"Генерация контента для пользователя {callback.from_user.id}")
+        content = await gemini_service.generate_document_content(user_request, template_type)
+        
+        if not content:
+            await status_message.edit_text(
+                "❌ Ошибка при генерации контента.\n"
+                "Пожалуйста, попробуйте ещё раз или измените запрос."
+            )
+            await state.clear()
+            return
+        
+        # Обновление статуса
+        await status_message.edit_text(
+            "📄 Контент сгенерирован!\n"
+            "⏳ Создаю документ..."
+        )
+        
+        # Создание документа в выбранном формате
+        if doc_type == 'docx':
+            filepath = await document_service.create_word_document(
+                content=content,
+                title=template_name,
+                user_id=callback.from_user.id
+            )
+        else:  # pdf
+            filepath = await document_service.create_pdf_document(
+                content=content,
+                title=template_name,
+                user_id=callback.from_user.id
+            )
+        
+        if not filepath:
+            await status_message.edit_text(
+                "❌ Ошибка при создании документа.\n"
+                "Пожалуйста, попробуйте ещё раз."
+            )
+            await state.clear()
+            return
+        
+        # Обновление статуса
+        await status_message.edit_text(
+            "📤 Отправляю документ..."
+        )
+        
+        # Отправка документа пользователю
+        document = FSInputFile(filepath)
+        
+        await callback.message.answer_document(
+            document=document,
+            caption=(
+                f"✅ <b>Документ готов!</b>\n\n"
+                f"📋 Тип: {template_name}\n"
+                f"📄 Формат: {Config.DOCUMENT_TYPES[doc_type]}\n"
+                f"📊 Размер контента: {len(content)} символов"
+            ),
+            parse_mode="HTML"
+        )
+        
+        # Удаление сообщения о статусе
+        await status_message.delete()
+        
+        # Очистка временного файла
+        document_service.cleanup_file(filepath)
+        
+        logger.info(f"Документ успешно создан и отправлен пользователю {callback.from_user.id}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при генерации документа: {e}")
+        await status_message.edit_text(
+            "❌ Произошла ошибка при создании документа.\n"
+            "Пожалуйста, попробуйте ещё раз позже."
+        )
+    
+    finally:
+        # Очистка состояния
+        await state.clear()
+        await callback.answer()
