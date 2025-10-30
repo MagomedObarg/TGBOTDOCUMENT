@@ -28,7 +28,8 @@ async def safe_edit_message(
         send_new_on_fail: If True, send a new message if editing fails
         
     Returns:
-        The edited message or new message if sent, None if operation failed
+        The edited message, new message if sent, or original message if editing failed 
+        and send_new_on_fail=False. Only returns None if all attempts fail.
     """
     try:
         return await message.edit_text(
@@ -38,7 +39,7 @@ async def safe_edit_message(
         )
     except TelegramBadRequest as e:
         error_msg = str(e)
-        logger.warning(f"Failed to edit message: {error_msg}")
+        logger.warning(f"Failed to edit message: {error_msg} (send_new_on_fail={send_new_on_fail})")
         
         if "message is not modified" in error_msg.lower():
             logger.debug("Message content is identical to current content, skipping edit")
@@ -55,6 +56,10 @@ async def safe_edit_message(
                 except Exception as new_msg_error:
                     logger.error(f"Failed to send new message: {new_msg_error}")
                     return None
+            else:
+                # Return the original message so downstream code doesn't break
+                logger.debug("Returning original message since send_new_on_fail=False")
+                return message
         elif "message to edit not found" in error_msg.lower():
             logger.debug("Message was deleted or not found")
             if send_new_on_fail:
@@ -67,13 +72,43 @@ async def safe_edit_message(
                 except Exception as new_msg_error:
                     logger.error(f"Failed to send new message: {new_msg_error}")
                     return None
+            else:
+                # Return the original message so downstream code doesn't break
+                logger.debug("Returning original message since send_new_on_fail=False")
+                return message
         else:
             logger.error(f"Unexpected TelegramBadRequest: {error_msg}")
-            
-        return None
+            # For unexpected errors, return the original message to prevent downstream issues
+            # unless the caller explicitly wants a new message on failure
+            if send_new_on_fail:
+                try:
+                    return await message.answer(
+                        text=text,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup
+                    )
+                except Exception as new_msg_error:
+                    logger.error(f"Failed to send new message after unexpected error: {new_msg_error}")
+                    return None
+            else:
+                logger.debug("Returning original message for unexpected error since send_new_on_fail=False")
+                return message
     except Exception as e:
         logger.error(f"Unexpected error while editing message: {e}")
-        return None
+        # For general exceptions, try to send a new message if requested, otherwise return original
+        if send_new_on_fail:
+            try:
+                return await message.answer(
+                    text=text,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup
+                )
+            except Exception as new_msg_error:
+                logger.error(f"Failed to send new message after general exception: {new_msg_error}")
+                return None
+        else:
+            logger.debug("Returning original message for general exception since send_new_on_fail=False")
+            return message
 
 
 async def safe_delete_message(message: Message) -> bool:
