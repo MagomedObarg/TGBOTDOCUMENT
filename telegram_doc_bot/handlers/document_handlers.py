@@ -20,6 +20,7 @@ from telegram_doc_bot.utils.keyboards import (
     get_api_key_management_keyboard
 )
 from telegram_doc_bot.utils.user_storage import UserStorage
+from telegram_doc_bot.utils.message_helpers import safe_edit_message, safe_delete_message
 from telegram_doc_bot.config import Config
 
 logger = logging.getLogger(__name__)
@@ -98,7 +99,8 @@ async def template_chosen(callback: CallbackQuery, state: FSMContext):
     # Сохранение выбранного шаблона в состояние
     await state.update_data(template_type=template_type, template_name=template_name)
     
-    await callback.message.edit_text(
+    await safe_edit_message(
+        callback.message,
         f"✅ Выбран шаблон: <b>{template_name}</b>",
         parse_mode="HTML"
     )
@@ -200,10 +202,12 @@ async def document_type_chosen(callback: CallbackQuery, state: FSMContext,
     # Проверка наличия API ключа
     api_key = user_storage.get_api_key(user_id)
     if not api_key:
-        await callback.message.edit_text(
+        await safe_edit_message(
+            callback.message,
             "❌ <b>API ключ не найден</b>\n\n"
             "Пожалуйста, добавьте API ключ перед созданием документов.",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            send_new_on_fail=True
         )
         await state.clear()
         await callback.answer()
@@ -218,7 +222,8 @@ async def document_type_chosen(callback: CallbackQuery, state: FSMContext,
     template_name = data.get('template_name')
     user_request = data.get('user_request')
     
-    await callback.message.edit_text(
+    await safe_edit_message(
+        callback.message,
         f"✅ Формат: <b>{Config.DOCUMENT_TYPES[doc_type]}</b>",
         parse_mode="HTML"
     )
@@ -236,17 +241,21 @@ async def document_type_chosen(callback: CallbackQuery, state: FSMContext,
         content = await gemini_service.generate_document_content(user_request, template_type)
         
         if not content:
-            await status_message.edit_text(
+            await safe_edit_message(
+                status_message,
                 "❌ Ошибка при генерации контента.\n"
-                "Пожалуйста, попробуйте ещё раз или измените запрос."
+                "Пожалуйста, попробуйте ещё раз или измените запрос.",
+                send_new_on_fail=True
             )
             await state.clear()
             return
         
         # Обновление статуса
-        await status_message.edit_text(
+        await safe_edit_message(
+            status_message,
             "📄 Контент сгенерирован!\n"
-            "⏳ Создаю документ..."
+            "⏳ Создаю документ...",
+            send_new_on_fail=True
         )
         
         # Создание документа в выбранном формате
@@ -264,16 +273,20 @@ async def document_type_chosen(callback: CallbackQuery, state: FSMContext,
             )
         
         if not filepath:
-            await status_message.edit_text(
+            await safe_edit_message(
+                status_message,
                 "❌ Ошибка при создании документа.\n"
-                "Пожалуйста, попробуйте ещё раз."
+                "Пожалуйста, попробуйте ещё раз.",
+                send_new_on_fail=True
             )
             await state.clear()
             return
         
         # Обновление статуса
-        await status_message.edit_text(
-            "📤 Отправляю документ..."
+        await safe_edit_message(
+            status_message,
+            "📤 Отправляю документ...",
+            send_new_on_fail=True
         )
         
         # Отправка документа пользователю
@@ -291,7 +304,7 @@ async def document_type_chosen(callback: CallbackQuery, state: FSMContext,
         )
         
         # Удаление сообщения о статусе
-        await status_message.delete()
+        await safe_delete_message(status_message)
         
         # Очистка временного файла
         document_service.cleanup_file(filepath)
@@ -317,9 +330,11 @@ async def document_type_chosen(callback: CallbackQuery, state: FSMContext,
         
     except Exception as e:
         logger.error(f"Ошибка при генерации документа: {e}")
-        await status_message.edit_text(
+        await safe_edit_message(
+            status_message,
             "❌ Произошла ошибка при создании документа.\n"
-            "Пожалуйста, попробуйте ещё раз позже."
+            "Пожалуйста, попробуйте ещё раз позже.",
+            send_new_on_fail=True
         )
         await state.clear()
     
@@ -336,7 +351,8 @@ async def start_document_editing(callback: CallbackQuery, state: FSMContext):
         await state.clear()
         return
     
-    await callback.message.edit_text(
+    await safe_edit_message(
+        callback.message,
         "✏️ <b>Редактирование документа</b>\n\n"
         "Опишите, какие изменения нужно внести в документ.\n\n"
         "Примеры инструкций:\n"
@@ -346,7 +362,8 @@ async def start_document_editing(callback: CallbackQuery, state: FSMContext):
         "• 'Добавь больше деталей о...'\n"
         "• 'Убери раздел о...'",
         parse_mode="HTML",
-        reply_markup=None
+        reply_markup=None,
+        send_new_on_fail=True
     )
     
     await callback.message.answer(
@@ -370,9 +387,11 @@ async def start_new_document(callback: CallbackQuery, state: FSMContext, user_st
 async def finish_document_flow(callback: CallbackQuery, state: FSMContext):
     """Завершение работы с документом"""
     await state.clear()
-    await callback.message.edit_text(
+    await safe_edit_message(
+        callback.message,
         "✅ Работа с документом завершена.",
-        reply_markup=None
+        reply_markup=None,
+        send_new_on_fail=True
     )
     await callback.message.answer(
         "Выберите действие:",
@@ -467,13 +486,19 @@ async def process_edit_instructions(
         )
         
         if not updated_content:
-            await status_message.edit_text(
-                "❌ Не удалось применить изменения. Попробуйте сформулировать инструкции иначе."
+            await safe_edit_message(
+                status_message,
+                "❌ Не удалось применить изменения. Попробуйте сформулировать инструкции иначе.",
+                send_new_on_fail=True
             )
             await state.set_state(DocumentGeneration.document_ready)
             return
         
-        await status_message.edit_text("📄 Изменения применены. Создаю обновлённый документ...")
+        await safe_edit_message(
+            status_message,
+            "📄 Изменения применены. Создаю обновлённый документ...",
+            send_new_on_fail=True
+        )
         
         if doc_type == 'docx':
             filepath = await document_service.create_word_document(
@@ -489,13 +514,19 @@ async def process_edit_instructions(
             )
         
         if not filepath:
-            await status_message.edit_text(
-                "❌ Не удалось создать обновлённый документ. Попробуйте ещё раз."
+            await safe_edit_message(
+                status_message,
+                "❌ Не удалось создать обновлённый документ. Попробуйте ещё раз.",
+                send_new_on_fail=True
             )
             await state.set_state(DocumentGeneration.document_ready)
             return
         
-        await status_message.edit_text("📤 Отправляю обновлённый документ...")
+        await safe_edit_message(
+            status_message,
+            "📤 Отправляю обновлённый документ...",
+            send_new_on_fail=True
+        )
         document = FSInputFile(filepath)
         
         await message.answer_document(
@@ -510,7 +541,7 @@ async def process_edit_instructions(
         )
         
         document_service.cleanup_file(filepath)
-        await status_message.delete()
+        await safe_delete_message(status_message)
         
         await state.update_data(
             last_content=updated_content,
@@ -527,7 +558,9 @@ async def process_edit_instructions(
         
     except Exception as e:
         logger.error(f"Ошибка при редактировании документа: {e}")
-        await status_message.edit_text(
-            "❌ Произошла ошибка при редактировании. Попробуйте позже."
+        await safe_edit_message(
+            status_message,
+            "❌ Произошла ошибка при редактировании. Попробуйте позже.",
+            send_new_on_fail=True
         )
         await state.clear()
