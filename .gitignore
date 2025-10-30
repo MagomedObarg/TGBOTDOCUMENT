@@ -41,6 +41,11 @@ ENV/
 generated_docs/
 test_output/
 
+# Database
+*.db
+user_data.db
+test_user_data.db
+
 # Logs
 *.log
 logs/

@@ -16,8 +16,10 @@ from telegram_doc_bot.utils.keyboards import (
     get_template_keyboard,
     get_document_type_keyboard,
     get_cancel_keyboard,
-    get_document_actions_keyboard
+    get_document_actions_keyboard,
+    get_api_key_management_keyboard
 )
+from telegram_doc_bot.utils.user_storage import UserStorage
 from telegram_doc_bot.config import Config
 
 logger = logging.getLogger(__name__)
@@ -41,14 +43,33 @@ class DocumentEditing(StatesGroup):
 
 @router.message(Command("generate"))
 @router.message(F.text == "📝 Создать документ")
-async def start_document_generation(message: Message, state: FSMContext):
+async def start_document_generation(message: Message, state: FSMContext, user_storage: UserStorage):
     """
     Начало процесса создания документа
     
     Args:
         message: Сообщение пользователя
         state: Состояние FSM
+        user_storage: Хранилище пользовательских данных
     """
+    user_id = message.from_user.id
+    
+    if not user_storage.has_api_key(user_id):
+        await message.answer(
+            "🔑 <b>API ключ не настроен</b>\n\n"
+            "❗ Для создания документов необходим API ключ Google Gemini.\n\n"
+            "🎯 <b>Что нужно сделать:</b>\n"
+            "1. Нажмите кнопку \"🔑 Мой API ключ\"\n"
+            "2. Следуйте инструкциям для получения ключа\n"
+            "3. Добавьте ключ в бот\n"
+            "4. Начните создавать документы!\n\n"
+            "💡 Это займёт всего пару минут, и API предоставляется бесплатно.",
+            parse_mode="HTML",
+            reply_markup=get_api_key_management_keyboard(has_key=False)
+        )
+        logger.info(f"Пользователь {user_id} попытался создать документ без API ключа")
+        return
+    
     await state.clear()
     
     await message.answer(
@@ -162,7 +183,7 @@ async def request_entered(message: Message, state: FSMContext):
 
 @router.callback_query(DocumentGeneration.choosing_doc_type, F.data.startswith("doctype_"))
 async def document_type_chosen(callback: CallbackQuery, state: FSMContext, 
-                               gemini_service: GeminiService, 
+                               user_storage: UserStorage, 
                                document_service: DocumentService):
     """
     Обработка выбора типа документа и генерация
@@ -170,10 +191,26 @@ async def document_type_chosen(callback: CallbackQuery, state: FSMContext,
     Args:
         callback: Callback запрос
         state: Состояние FSM
-        gemini_service: Сервис Gemini API
+        user_storage: Хранилище пользовательских данных
         document_service: Сервис генерации документов
     """
     doc_type = callback.data.split("_")[1]
+    user_id = callback.from_user.id
+    
+    # Проверка наличия API ключа
+    api_key = user_storage.get_api_key(user_id)
+    if not api_key:
+        await callback.message.edit_text(
+            "❌ <b>API ключ не найден</b>\n\n"
+            "Пожалуйста, добавьте API ключ перед созданием документов.",
+            parse_mode="HTML"
+        )
+        await state.clear()
+        await callback.answer()
+        return
+    
+    # Инициализация Gemini сервиса с API ключом пользователя
+    gemini_service = GeminiService(api_key=api_key)
     
     # Получение данных из состояния
     data = await state.get_data()
@@ -322,11 +359,11 @@ async def start_document_editing(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(DocumentGeneration.document_ready, F.data == "action_new")
-async def start_new_document(callback: CallbackQuery, state: FSMContext):
+async def start_new_document(callback: CallbackQuery, state: FSMContext, user_storage: UserStorage):
     """Запуск процесса создания нового документа"""
     await state.clear()
     await callback.answer()
-    await start_document_generation(callback.message, state)
+    await start_document_generation(callback.message, state, user_storage)
 
 
 @router.callback_query(DocumentGeneration.document_ready, F.data == "action_finish")
@@ -371,11 +408,12 @@ async def cancel_editing(message: Message, state: FSMContext):
 async def process_edit_instructions(
     message: Message,
     state: FSMContext,
-    gemini_service: GeminiService,
+    user_storage: UserStorage,
     document_service: DocumentService
 ):
     """Обработка инструкций по редактированию документа"""
     instructions = message.text.strip()
+    user_id = message.from_user.id
     
     if len(instructions) < 5:
         await message.answer(
@@ -383,6 +421,21 @@ async def process_edit_instructions(
             reply_markup=get_cancel_keyboard()
         )
         return
+    
+    # Проверка наличия API ключа
+    api_key = user_storage.get_api_key(user_id)
+    if not api_key:
+        await message.answer(
+            "❌ <b>API ключ не найден</b>\n\n"
+            "Пожалуйста, добавьте API ключ перед редактированием документов.",
+            parse_mode="HTML",
+            reply_markup=get_main_keyboard()
+        )
+        await state.clear()
+        return
+    
+    # Инициализация Gemini сервиса с API ключом пользователя
+    gemini_service = GeminiService(api_key=api_key)
     
     data = await state.get_data()
     last_content = data.get('last_content')

@@ -21,6 +21,7 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📝 Создать документ")],
+            [KeyboardButton(text="🔑 Мой API ключ")],
             [KeyboardButton(text="❓ Помощь"), KeyboardButton(text="ℹ️ О боте")]
         ],
         resize_keyboard=True,
@@ -101,6 +102,66 @@ def get_document_actions_keyboard() -> InlineKeyboardMarkup:
             text="✅ Завершить",
             callback_data="action_finish"
         )]
+    ]
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    return keyboard
+
+
+def get_api_key_management_keyboard(has_key: bool = False) -> InlineKeyboardMarkup:
+    """
+    Создание клавиатуры для управления API ключом
+    
+    Args:
+        has_key: Есть ли у пользователя сохранённый ключ
+    
+    Returns:
+        Inline клавиатура с действиями для управления API ключом
+    """
+    buttons = []
+    
+    if has_key:
+        buttons.append([InlineKeyboardButton(
+            text="🔄 Обновить API ключ",
+            callback_data="apikey_update"
+        )])
+        buttons.append([InlineKeyboardButton(
+            text="🗑 Удалить API ключ",
+            callback_data="apikey_delete"
+        )])
+    else:
+        buttons.append([InlineKeyboardButton(
+            text="➕ Добавить API ключ",
+            callback_data="apikey_add"
+        )])
+    
+    buttons.append([InlineKeyboardButton(
+        text="ℹ️ Где получить ключ?",
+        callback_data="apikey_help"
+    )])
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    return keyboard
+
+
+def get_api_key_confirm_keyboard() -> InlineKeyboardMarkup:
+    """
+    Создание клавиатуры для подтверждения удаления API ключа
+    
+    Returns:
+        Inline клавиатура с кнопками подтверждения
+    """
+    buttons = [
+        [
+            InlineKeyboardButton(
+                text="✅ Да, удалить",
+                callback_data="apikey_delete_confirm"
+            ),
+            InlineKeyboardButton(
+                text="❌ Отмена",
+                callback_data="apikey_delete_cancel"
+            )
+        ]
     ]
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)

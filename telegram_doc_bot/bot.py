@@ -12,7 +12,8 @@ from aiogram.client.default import DefaultBotProperties
 
 from telegram_doc_bot.config import Config
 from telegram_doc_bot.services import GeminiService, DocumentService
-from telegram_doc_bot.handlers import basic_handlers, document_handlers
+from telegram_doc_bot.handlers import basic_handlers, document_handlers, api_key_handlers
+from telegram_doc_bot.utils.user_storage import UserStorage
 
 # Настройка логирования
 logging.basicConfig(
@@ -45,13 +46,14 @@ async def main():
         dp = Dispatcher()
         
         # Инициализация сервисов
-        gemini_service = GeminiService(api_key=Config.GEMINI_API_KEY)
         document_service = DocumentService(output_dir=Config.TEMP_DIR)
+        user_storage = UserStorage()
         
         logger.info("Сервисы инициализированы")
         
         # Регистрация обработчиков
         dp.include_router(basic_handlers.router)
+        dp.include_router(api_key_handlers.router)
         dp.include_router(document_handlers.router)
         
         logger.info("Обработчики зарегистрированы")
@@ -65,8 +67,8 @@ async def main():
         logger.info("Начало polling...")
         await dp.start_polling(
             bot,
-            gemini_service=gemini_service,
             document_service=document_service,
+            user_storage=user_storage,
             allowed_updates=dp.resolve_used_update_types()
         )
         
