@@ -56,10 +56,6 @@ async def main():
         
         logger.info("Обработчики зарегистрированы")
         
-        # Внедрение зависимостей для обработчиков
-        document_handlers.router["gemini_service"] = gemini_service
-        document_handlers.router["document_service"] = document_service
-        
         # Получение информации о боте
         bot_info = await bot.get_me()
         logger.info(f"Бот запущен: @{bot_info.username}")
