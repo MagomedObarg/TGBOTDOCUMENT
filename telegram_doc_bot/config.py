@@ -46,8 +46,6 @@ class Config:
         """Проверка наличия обязательных переменных окружения"""
         if not Config.TELEGRAM_BOT_TOKEN:
             raise ValueError("TELEGRAM_BOT_TOKEN не установлен в .env файле")
-        if not Config.GEMINI_API_KEY:
-            raise ValueError("GEMINI_API_KEY не установлен в .env файле")
 
 
 # Создание директории для временных файлов
