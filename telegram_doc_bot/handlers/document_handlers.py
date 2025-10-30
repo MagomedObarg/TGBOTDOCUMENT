@@ -5,7 +5,7 @@
 
 import logging
 from aiogram import Router, F
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -15,7 +15,8 @@ from telegram_doc_bot.utils.keyboards import (
     get_main_keyboard,
     get_template_keyboard,
     get_document_type_keyboard,
-    get_cancel_keyboard
+    get_cancel_keyboard,
+    get_document_actions_keyboard
 )
 from telegram_doc_bot.config import Config
 
@@ -30,6 +31,12 @@ class DocumentGeneration(StatesGroup):
     choosing_template = State()  # Выбор шаблона
     entering_request = State()   # Ввод описания документа
     choosing_doc_type = State()  # Выбор типа файла (Word/PDF)
+    document_ready = State()     # Документ готов, можно редактировать
+
+
+class DocumentEditing(StatesGroup):
+    """Состояния для процесса редактирования документа"""
+    entering_edit_instructions = State()  # Ввод инструкций по редактированию
 
 
 @router.message(Command("generate"))
@@ -252,6 +259,23 @@ async def document_type_chosen(callback: CallbackQuery, state: FSMContext,
         # Очистка временного файла
         document_service.cleanup_file(filepath)
         
+        # Сохраняем данные документа для возможного редактирования
+        await state.update_data(
+            last_content=content,
+            last_template_type=template_type,
+            last_template_name=template_name,
+            last_doc_type=doc_type,
+            last_user_request=user_request
+        )
+        
+        # Предложение действий с документом
+        await callback.message.answer(
+            "Что вы хотите сделать дальше?",
+            reply_markup=get_document_actions_keyboard()
+        )
+        
+        await state.set_state(DocumentGeneration.document_ready)
+        
         logger.info(f"Документ успешно создан и отправлен пользователю {callback.from_user.id}")
         
     except Exception as e:
@@ -260,8 +284,197 @@ async def document_type_chosen(callback: CallbackQuery, state: FSMContext,
             "❌ Произошла ошибка при создании документа.\n"
             "Пожалуйста, попробуйте ещё раз позже."
         )
+        await state.clear()
     
     finally:
-        # Очистка состояния
-        await state.clear()
         await callback.answer()
+
+
+@router.callback_query(DocumentGeneration.document_ready, F.data == "action_edit")
+async def start_document_editing(callback: CallbackQuery, state: FSMContext):
+    """Начало процесса редактирования документа"""
+    data = await state.get_data()
+    if not data.get('last_content'):
+        await callback.answer("Нет данных для редактирования", show_alert=True)
+        await state.clear()
+        return
+    
+    await callback.message.edit_text(
+        "✏️ <b>Редактирование документа</b>\n\n"
+        "Опишите, какие изменения нужно внести в документ.\n\n"
+        "Примеры инструкций:\n"
+        "• 'Добавь раздел о гарантиях'\n"
+        "• 'Сделай текст короче и лаконичнее'\n"
+        "• 'Измени тон на более формальный'\n"
+        "• 'Добавь больше деталей о...'\n"
+        "• 'Убери раздел о...'",
+        parse_mode="HTML",
+        reply_markup=None
+    )
+    
+    await callback.message.answer(
+        "Введите инструкции по редактированию:",
+        reply_markup=get_cancel_keyboard()
+    )
+    
+    await state.set_state(DocumentEditing.entering_edit_instructions)
+    await callback.answer()
+
+
+@router.callback_query(DocumentGeneration.document_ready, F.data == "action_new")
+async def start_new_document(callback: CallbackQuery, state: FSMContext):
+    """Запуск процесса создания нового документа"""
+    await state.clear()
+    await callback.answer()
+    await start_document_generation(callback.message, state)
+
+
+@router.callback_query(DocumentGeneration.document_ready, F.data == "action_finish")
+async def finish_document_flow(callback: CallbackQuery, state: FSMContext):
+    """Завершение работы с документом"""
+    await state.clear()
+    await callback.message.edit_text(
+        "✅ Работа с документом завершена.",
+        reply_markup=None
+    )
+    await callback.message.answer(
+        "Выберите действие:",
+        reply_markup=get_main_keyboard()
+    )
+    await callback.answer()
+
+
+@router.message(DocumentEditing.entering_edit_instructions, F.text == "❌ Отмена")
+@router.message(DocumentEditing.entering_edit_instructions, Command("cancel"))
+async def cancel_editing(message: Message, state: FSMContext):
+    """Отмена редактирования"""
+    data = await state.get_data()
+    if data.get('last_content'):
+        await message.answer(
+            "❌ Редактирование отменено.",
+            reply_markup=get_main_keyboard()
+        )
+        await message.answer(
+            "Что вы хотите сделать дальше?",
+            reply_markup=get_document_actions_keyboard()
+        )
+        await state.set_state(DocumentGeneration.document_ready)
+    else:
+        await message.answer(
+            "❌ Редактирование отменено.",
+            reply_markup=get_main_keyboard()
+        )
+        await state.clear()
+
+
+@router.message(DocumentEditing.entering_edit_instructions, F.text)
+async def process_edit_instructions(
+    message: Message,
+    state: FSMContext,
+    gemini_service: GeminiService,
+    document_service: DocumentService
+):
+    """Обработка инструкций по редактированию документа"""
+    instructions = message.text.strip()
+    
+    if len(instructions) < 5:
+        await message.answer(
+            "⚠️ Инструкции слишком короткие. Опишите, что нужно изменить более подробно.",
+            reply_markup=get_cancel_keyboard()
+        )
+        return
+    
+    data = await state.get_data()
+    last_content = data.get('last_content')
+    template_type = data.get('last_template_type', 'custom')
+    template_name = data.get('last_template_name', 'Документ')
+    doc_type = data.get('last_doc_type', 'docx')
+    
+    if not last_content:
+        await message.answer(
+            "❌ Не удалось получить текущий документ для редактирования. Начните генерацию заново.",
+            reply_markup=get_main_keyboard()
+        )
+        await state.clear()
+        return
+    
+    status_message = await message.answer(
+        "✏️ Применяю изменения к документу...\n"
+        "Это может занять 10-30 секунд."
+    )
+    
+    try:
+        logger.info(
+            f"Редактирование документа пользователя {message.from_user.id} с инструкциями: {instructions[:50]}..."
+        )
+        updated_content = await gemini_service.edit_document_content(
+            original_content=last_content,
+            edit_instructions=instructions,
+            template_type=template_type
+        )
+        
+        if not updated_content:
+            await status_message.edit_text(
+                "❌ Не удалось применить изменения. Попробуйте сформулировать инструкции иначе."
+            )
+            await state.set_state(DocumentGeneration.document_ready)
+            return
+        
+        await status_message.edit_text("📄 Изменения применены. Создаю обновлённый документ...")
+        
+        if doc_type == 'docx':
+            filepath = await document_service.create_word_document(
+                content=updated_content,
+                title=template_name,
+                user_id=message.from_user.id
+            )
+        else:
+            filepath = await document_service.create_pdf_document(
+                content=updated_content,
+                title=template_name,
+                user_id=message.from_user.id
+            )
+        
+        if not filepath:
+            await status_message.edit_text(
+                "❌ Не удалось создать обновлённый документ. Попробуйте ещё раз."
+            )
+            await state.set_state(DocumentGeneration.document_ready)
+            return
+        
+        await status_message.edit_text("📤 Отправляю обновлённый документ...")
+        document = FSInputFile(filepath)
+        
+        await message.answer_document(
+            document=document,
+            caption=(
+                f"✅ <b>Документ обновлён!</b>\n\n"
+                f"📋 Тип: {template_name}\n"
+                f"📄 Формат: {Config.DOCUMENT_TYPES.get(doc_type, doc_type)}\n"
+                f"📊 Размер контента: {len(updated_content)} символов"
+            ),
+            parse_mode="HTML"
+        )
+        
+        document_service.cleanup_file(filepath)
+        await status_message.delete()
+        
+        await state.update_data(
+            last_content=updated_content,
+            last_doc_type=doc_type
+        )
+        
+        await message.answer(
+            "Хотите продолжить редактирование или создать новый документ?",
+            reply_markup=get_document_actions_keyboard()
+        )
+        await state.set_state(DocumentGeneration.document_ready)
+        
+        logger.info(f"Документ пользователя {message.from_user.id} успешно отредактирован")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при редактировании документа: {e}")
+        await status_message.edit_text(
+            "❌ Произошла ошибка при редактировании. Попробуйте позже."
+        )
+        await state.clear()

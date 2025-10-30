@@ -79,3 +79,29 @@ def get_cancel_keyboard() -> ReplyKeyboardMarkup:
         resize_keyboard=True
     )
     return keyboard
+
+
+def get_document_actions_keyboard() -> InlineKeyboardMarkup:
+    """
+    Создание клавиатуры с действиями для документа после генерации
+    
+    Returns:
+        Inline клавиатура с действиями (редактировать, создать новый, завершить)
+    """
+    buttons = [
+        [InlineKeyboardButton(
+            text="✏️ Редактировать документ",
+            callback_data="action_edit"
+        )],
+        [InlineKeyboardButton(
+            text="📝 Создать новый документ",
+            callback_data="action_new"
+        )],
+        [InlineKeyboardButton(
+            text="✅ Завершить",
+            callback_data="action_finish"
+        )]
+    ]
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    return keyboard
