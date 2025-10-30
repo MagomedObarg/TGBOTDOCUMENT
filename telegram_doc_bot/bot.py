@@ -12,7 +12,7 @@ from aiogram.client.default import DefaultBotProperties
 
 from telegram_doc_bot.config import Config
 from telegram_doc_bot.services import GeminiService, DocumentService
-from telegram_doc_bot.handlers import basic_handlers, document_handlers, api_key_handlers
+from telegram_doc_bot.handlers import basic_handlers, document_handlers, api_key_handlers, advanced_handlers
 from telegram_doc_bot.utils.user_storage import UserStorage
 
 # Настройка логирования
@@ -54,6 +54,7 @@ async def main():
         # Регистрация обработчиков
         dp.include_router(basic_handlers.router)
         dp.include_router(api_key_handlers.router)
+        dp.include_router(advanced_handlers.router)
         dp.include_router(document_handlers.router)
         
         logger.info("Обработчики зарегистрированы")

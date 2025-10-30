@@ -318,9 +318,21 @@ async def document_type_chosen(callback: CallbackQuery, state: FSMContext,
             last_user_request=user_request
         )
         
+        # Добавляем в историю и обновляем статистику
+        doc_data = {
+            'template_name': template_name,
+            'template_type': template_type,
+            'doc_type': doc_type,
+            'content': content,
+            'user_request': user_request
+        }
+        user_storage.add_to_history(user_id, doc_data)
+        word_count = len(content.split())
+        user_storage.update_statistics(user_id, template_type, word_count, is_edit=False)
+        
         # Предложение действий с документом
         await callback.message.answer(
-            "Что вы хотите сделать дальше?",
+            "✨ Что вы хотите сделать дальше?",
             reply_markup=get_document_actions_keyboard()
         )
         
@@ -548,8 +560,11 @@ async def process_edit_instructions(
             last_doc_type=doc_type
         )
         
+        # Обновляем статистику редактирования
+        user_storage.update_statistics(user_id, template_type, 0, is_edit=True)
+        
         await message.answer(
-            "Хотите продолжить редактирование или создать новый документ?",
+            "✨ Хотите продолжить редактирование или создать новый документ?",
             reply_markup=get_document_actions_keyboard()
         )
         await state.set_state(DocumentGeneration.document_ready)
@@ -564,3 +579,60 @@ async def process_edit_instructions(
             send_new_on_fail=True
         )
         await state.clear()
+
+
+@router.callback_query(DocumentGeneration.document_ready, F.data == "action_convert")
+async def action_convert(callback: CallbackQuery, state: FSMContext, document_service: DocumentService):
+    """Конвертация документа в другой формат"""
+    data = await state.get_data()
+    content = data.get('last_content')
+    template_name = data.get('last_template_name', 'Документ')
+    current_type = data.get('last_doc_type', 'docx')
+    
+    if not content:
+        await callback.answer("Нет документа для конвертации", show_alert=True)
+        return
+    
+    new_type = 'pdf' if current_type == 'docx' else 'docx'
+    
+    status_msg = await callback.message.answer(
+        f"🔄 Конвертирую документ в формат {new_type.upper()}..."
+    )
+    
+    try:
+        if new_type == 'docx':
+            filepath = await document_service.create_word_document(
+                content=content,
+                title=template_name,
+                user_id=callback.from_user.id
+            )
+        else:
+            filepath = await document_service.create_pdf_document(
+                content=content,
+                title=template_name,
+                user_id=callback.from_user.id
+            )
+        
+        if filepath:
+            document = FSInputFile(filepath)
+            await callback.message.answer_document(
+                document=document,
+                caption=f"✅ Документ конвертирован в {Config.DOCUMENT_TYPES.get(new_type)}",
+                parse_mode="HTML"
+            )
+            document_service.cleanup_file(filepath)
+            await state.update_data(last_doc_type=new_type)
+        else:
+            await status_msg.edit_text("❌ Ошибка при конвертации документа")
+        
+        await safe_delete_message(status_msg)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при конвертации документа: {e}")
+        await safe_edit_message(
+            status_msg,
+            "❌ Произошла ошибка при конвертации",
+            send_new_on_fail=True
+        )
+    
+    await callback.answer()
