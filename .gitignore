@@ -39,6 +39,7 @@ ENV/
 *.docx
 *.pdf
 generated_docs/
+test_output/
 
 # Logs
 *.log
