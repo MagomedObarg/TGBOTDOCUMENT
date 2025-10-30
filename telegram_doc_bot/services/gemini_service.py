@@ -83,6 +83,85 @@ class GeminiService:
             logger.error(f"Ошибка API Gemini: {e}")
             return None
     
+    async def edit_document_content(
+        self,
+        original_content: str,
+        edit_instructions: str,
+        template_type: str = 'custom'
+    ) -> Optional[str]:
+        """
+        Редактирование содержимого документа на основе инструкций
+        
+        Args:
+            original_content: Исходное содержимое документа
+            edit_instructions: Инструкции по редактированию
+            template_type: Тип шаблона документа
+        
+        Returns:
+            Обновлённый текст документа или None в случае ошибки
+        """
+        try:
+            prompt = self._create_edit_prompt(original_content, edit_instructions, template_type)
+            
+            logger.info(f"Редактирование документа с инструкциями: {edit_instructions[:50]}...")
+            
+            response = await self._generate_async(prompt)
+            
+            if response:
+                logger.info(f"Документ успешно отредактирован, длина: {len(response)} символов")
+                return response
+            else:
+                logger.error("Не удалось получить ответ от Gemini API при редактировании")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Ошибка при редактировании контента: {e}")
+            return None
+    
+    def _create_edit_prompt(
+        self,
+        original_content: str,
+        edit_instructions: str,
+        template_type: str
+    ) -> str:
+        """
+        Создание промпта для редактирования документа
+        
+        Args:
+            original_content: Исходное содержимое
+            edit_instructions: Инструкции по редактированию
+            template_type: Тип шаблона документа
+        
+        Returns:
+            Сформированный промпт для редактирования
+        """
+        prompt = f"""
+Ты - профессиональный редактор документов. Текущий тип документа: {template_type}.
+У тебя есть существующий документ и инструкции по его изменению.
+
+ИСХОДНЫЙ ДОКУМЕНТ:
+```
+{original_content}
+```
+
+ИНСТРУКЦИИ ПО РЕДАКТИРОВАНИЮ:
+{edit_instructions}
+
+ЗАДАЧА:
+Отредактируй документ согласно инструкциям. Сохрани общую структуру и стиль документа, внеся только необходимые изменения.
+
+ВАЖНО:
+- Сохрани форматирование Markdown (##, ###, **, *, списки)
+- Не удаляй важные разделы, если это не указано в инструкциях
+- Сохрани профессиональный стиль и тон документа
+- Если инструкция требует добавить информацию - добавь её логично в структуру
+- Если инструкция требует удалить что-то - аккуратно удали, сохранив целостность документа
+- Если инструкция требует изменить стиль - примени изменения ко всему документу
+
+Верни полный отредактированный документ с применёнными изменениями.
+"""
+        return prompt
+    
     def _create_prompt(self, user_request: str, template_type: str) -> str:
         """
         Создание промпта для Gemini на основе типа документа
