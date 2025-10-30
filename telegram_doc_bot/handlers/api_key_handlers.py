@@ -17,6 +17,7 @@ from telegram_doc_bot.utils.keyboards import (
     get_api_key_confirm_keyboard
 )
 from telegram_doc_bot.utils.user_storage import UserStorage
+from telegram_doc_bot.utils.message_helpers import safe_edit_message
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,8 @@ async def start_api_key_setup(callback: CallbackQuery, state: FSMContext):
     is_update = callback.data == "apikey_update"
     action = "обновить" if is_update else "добавить"
     
-    await callback.message.edit_text(
+    await safe_edit_message(
+        callback.message,
         f"🔑 <b>{'Обновление' if is_update else 'Добавление'} API ключа</b>\n\n"
         f"📝 Отправьте ваш API ключ Google Gemini.\n\n"
         f"⚠️ <b>Важно:</b>\n"
@@ -92,7 +94,8 @@ async def start_api_key_setup(callback: CallbackQuery, state: FSMContext):
         f"• Ключ будет сохранён в защищённом хранилище\n"
         f"• Никто кроме вас не сможет использовать ваш ключ\n\n"
         f"❌ Используйте /cancel для отмены",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        send_new_on_fail=True
     )
     
     await state.set_state(APIKeySetup.entering_key)
@@ -136,10 +139,12 @@ async def show_api_key_help(callback: CallbackQuery):
         "❓ Если возникли проблемы, проверьте документацию Google AI Studio"
     )
     
-    await callback.message.edit_text(
+    await safe_edit_message(
+        callback.message,
         help_text,
         parse_mode="HTML",
-        reply_markup=get_api_key_management_keyboard(has_key=False)
+        reply_markup=get_api_key_management_keyboard(has_key=False),
+        send_new_on_fail=True
     )
     
     await callback.answer()
@@ -236,7 +241,8 @@ async def confirm_api_key_deletion(callback: CallbackQuery):
     Args:
         callback: Callback запрос
     """
-    await callback.message.edit_text(
+    await safe_edit_message(
+        callback.message,
         "🗑 <b>Удаление API ключа</b>\n\n"
         "⚠️ Вы уверены, что хотите удалить ваш API ключ?\n\n"
         "После удаления:\n"
@@ -244,7 +250,8 @@ async def confirm_api_key_deletion(callback: CallbackQuery):
         "• Вам потребуется добавить ключ заново\n\n"
         "Подтвердите удаление:",
         parse_mode="HTML",
-        reply_markup=get_api_key_confirm_keyboard()
+        reply_markup=get_api_key_confirm_keyboard(),
+        send_new_on_fail=True
     )
     
     await callback.answer()
@@ -261,20 +268,24 @@ async def delete_api_key(callback: CallbackQuery):
     user_id = callback.from_user.id
     
     if user_storage.delete_api_key(user_id):
-        await callback.message.edit_text(
+        await safe_edit_message(
+            callback.message,
             "✅ <b>API ключ удалён</b>\n\n"
             "Ваш API ключ был успешно удалён из системы.\n\n"
             "Чтобы снова использовать бот, добавьте новый ключ через:\n"
             "🔑 Мой API ключ",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            send_new_on_fail=True
         )
         
         logger.info(f"API ключ удалён для пользователя {user_id}")
     else:
-        await callback.message.edit_text(
+        await safe_edit_message(
+            callback.message,
             "❌ <b>Ошибка при удалении</b>\n\n"
             "Не удалось удалить API ключ. Попробуйте позже.",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            send_new_on_fail=True
         )
         
         logger.error(f"Не удалось удалить API ключ для пользователя {user_id}")
@@ -290,9 +301,11 @@ async def cancel_api_key_deletion(callback: CallbackQuery):
     Args:
         callback: Callback запрос
     """
-    await callback.message.edit_text(
+    await safe_edit_message(
+        callback.message,
         "✅ Удаление отменено. Ваш API ключ сохранён.",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        send_new_on_fail=True
     )
     
     await show_api_key_status(callback.message)
